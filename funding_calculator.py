@@ -225,8 +225,8 @@ function setMode(m){{
   document.getElementById("btn-r").className=m==="rollup"?"active":"";
   document.getElementById("btn-v").className=m==="validium"?"active":"";
   document.getElementById("mi").textContent=m==="rollup"
-    ?"Rollup: pubdata posted to L1 via EIP-4844 blobs. Batch frequency scales with TPS."
-    :"Validium: pubdata stored off-chain. L1 costs stay flat regardless of TPS. No blob gas.";
+    ?"Rollup: pubdata posted to L1 via EIP-4844 blobs. Batch frequency scales with TPS. Commits include blob gas."
+    :"Validium: pubdata stored off-chain. No blob gas on commits. Batch frequency still scales with TPS (pubdata and tx-count limits still apply to batch sealing).";
   upd();
 }}
 
@@ -236,14 +236,17 @@ function fN(v){{ return v<0.0001?'<span class="ok">funded</span>':'<span class="
 function cBPD(t){{
   const bt=D.l2_block_time, bpd=86400/bt, cb=D.blocks_per_batch;
   const pp=parseInt(document.getElementById("pi").value)||300;
+  const tpb=t*bt, ppb=tpb*pp;
+  let e=cb;
+  // Pubdata limit constrains batch size (applies to BOTH rollup and validium)
+  if(ppb>0&&ppb*e>BPL) e=Math.max(1,Math.floor(BPL/ppb));
+  // Tx-per-batch limit (10,000) constrains batch size
+  if(tpb>0&&tpb*e>10000) e=Math.min(e,Math.max(1,Math.floor(10000/tpb)));
+  const pb=e*ppb;
   if(mode==="validium"){{
-    const tb=t*bt*cb; let e=cb;
-    if(tb>10000) e=Math.max(1,Math.floor(10000/(t*bt)));
-    return {{bpd:bpd/e,bl:0,e:e,pub:0}};
+    return {{bpd:bpd/e,bl:0,e:e,pub:pb}};
   }}
-  const tpb=t*bt, ppb=tpb*pp; let e=cb;
-  if(ppb>0&&ppb*cb>BPL) e=Math.max(1,Math.floor(BPL/ppb));
-  const pb=e*ppb, bl=Math.max(1,Math.ceil(pb/BB));
+  const bl=Math.max(1,Math.ceil(pb/BB));
   return {{bpd:bpd/e,bl:bl,e:e,pub:pb}};
 }}
 

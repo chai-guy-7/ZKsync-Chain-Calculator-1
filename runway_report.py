@@ -386,13 +386,13 @@ def report(d):
     w(f"\n  Assumptions:")
     w(f"    L2 block time:            {bt:.1f}s")
     w(f"    DA mode:                  {da}")
+    w(f"    Batch pubdata limit:      {BATCH_PUBDATA_LIMIT:,} bytes")
+    w(f"    Tx per batch limit:       10,000")
+    w(f"    Pubdata per L2 tx:        {cfg.pubdata_per_tx} bytes")
     if not is_val:
-        w(f"    Batch pubdata limit:      {BATCH_PUBDATA_LIMIT:,} bytes")
-        w(f"    Pubdata per L2 tx:        {cfg.pubdata_per_tx} bytes")
         w(f"    Blob gas per blob:        {BLOB_GAS_PER_BLOB:,}")
     else:
-        w(f"    Batch constraint:         blocks_per_batch (pubdata off-chain)")
-        w(f"    No blob gas (off-chain DA)")
+        w(f"    Blob gas:                 none (off-chain DA)")
     w(f"    Commit exec gas:          {cg:,}")
     w(f"    Prove gas:                {pg:,}")
     w(f"    Execute gas:              {eg:,}")
@@ -401,30 +401,40 @@ def report(d):
     w("")
 
     if is_val:
-        w("  Validium: L1 costs do NOT scale with TPS. Batch frequency stays at the")
-        w(f"  current rate (~{bpd/cbpb:.1f} batches/day) until the tx-per-batch limit")
-        w("  (10,000) is reached. No blob gas is charged.\n")
+        w("  Validium: pubdata is stored off-chain, so no blob gas is charged on commits.")
+        w("  However, batch frequency DOES still scale with TPS because the batch sealing")
+        w("  criteria (pubdata limit, tx-per-batch limit) still apply regardless of DA mode.")
+        w("  The VM still generates state diffs that count toward the pubdata limit.")
+        w(f"  The saving vs Rollup is the blob gas (~{BLOB_GAS_PER_BLOB:,} gas/blob per commit).\n")
     else:
         w("  Rollup: higher TPS -> more pubdata per block -> smaller batches -> more")
         w("  L1 txs per day. Each batch fits in 1 blob (pubdata limit < blob size).\n")
 
     def tps_row(target_tps, gwei):
-        txpb = target_tps * bt
-        ppb = txpb * cfg.pubdata_per_tx
+        txpb = target_tps * bt   # txs per block
+        ppb = txpb * cfg.pubdata_per_tx  # pubdata per block
+
+        # Start with current blocks-per-batch, then constrain
+        eff = cbpb
+
+        # Pubdata limit constrains batch size (applies to BOTH rollup and validium)
+        if ppb > 0 and ppb * eff > BATCH_PUBDATA_LIMIT:
+            eff = max(1, int(BATCH_PUBDATA_LIMIT / ppb))
+
+        # Tx-per-batch limit (10,000) constrains batch size
+        if txpb > 0 and txpb * eff > 10000:
+            eff = min(eff, max(1, int(10000 / txpb)))
+
+        pub_batch = eff * ppb
         if is_val:
-            eff = cbpb
-            txs_batch = txpb * cbpb
-            if txs_batch > 10000: eff = max(1, int(10000 / txpb))
             blobs = 0
         else:
-            eff = cbpb
-            if ppb > 0 and ppb * cbpb > BATCH_PUBDATA_LIMIT:
-                eff = max(1, int(BATCH_PUBDATA_LIMIT / ppb))
-            pub_batch = eff * ppb
             blobs = max(1, math.ceil(pub_batch / BLOB_SIZE))
+
         bpd_val = bpd / eff if eff > 0 else 0
         cd = bpd_val * cg * gwei * 1e-9
-        if not is_val: cd += bpd_val * blobs * BLOB_GAS_PER_BLOB * avg_blob_gp * 1e-9
+        if not is_val:
+            cd += bpd_val * blobs * BLOB_GAS_PER_BLOB * avg_blob_gp * 1e-9
         pd = bpd_val * pg * gwei * 1e-9
         ed = bpd_val * eg * gwei * 1e-9
         wd = wr * wg * gwei * 1e-9
